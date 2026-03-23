@@ -25,7 +25,10 @@ common:
 # ★ memberlist がインターフェースを探しに行かないように明示指定
 memberlist:
   bind_addr:
-    - 127.0.0.1
+    - 153.120.3.122
+  interface_names:
+    - ens3
+    - lo
 
 schema_config:
   configs:
