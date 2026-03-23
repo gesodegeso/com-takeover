@@ -614,6 +614,145 @@ alloy fmt /etc/alloy/config.alloy
 
 ---
 
+## Grafana メール通知設定（SMTP）
+
+アラートルールに基づいてメール通知を送信するには、Grafana の SMTP 設定が必要です。
+
+### SMTP の設定
+
+`/etc/grafana/grafana.ini` の `[smtp]` セクションを編集します。
+
+```bash
+sudo vim /etc/grafana/grafana.ini
+```
+
+```ini
+[smtp]
+enabled = true
+host = smtp.example.com:587
+user = grafana@example.com
+password = """your-smtp-password"""
+from_address = grafana@example.com
+from_name = Grafana Alert
+startTLS_policy = MandatoryStartTLS
+
+# 自己署名証明書を使う場合のみ true（通常は false）
+skip_verify = false
+```
+
+主要な SMTP プロバイダの設定例：
+
+| プロバイダ | host | startTLS_policy | 備考 |
+|-----------|------|-----------------|------|
+| Gmail | `smtp.gmail.com:587` | `MandatoryStartTLS` | アプリパスワードが必要 |
+| Amazon SES | `email-smtp.ap-northeast-1.amazonaws.com:587` | `MandatoryStartTLS` | IAM で SMTP 認証情報を発行 |
+| さくら メールボックス | `<初期ドメイン>.sakura.ne.jp:587` | `MandatoryStartTLS` | |
+| SendGrid | `smtp.sendgrid.net:587` | `MandatoryStartTLS` | user は `apikey` 固定 |
+
+```bash
+# 設定変更後に再起動
+sudo systemctl restart grafana-server
+```
+
+### テストメールの送信
+
+Grafana UI から確認します。
+
+1. **Alerting** → **Contact points** を開く
+2. **Add contact point** をクリック
+3. Integration に **Email** を選択し、宛先アドレスを入力
+4. **Test** ボタンでテストメールを送信
+5. メールが届いたら **Save contact point** で保存
+
+### アラートルールとの連携
+
+```mermaid
+flowchart LR
+    Rule[アラートルール<br/>例: CPU > 90%] --> Policy[Notification policy]
+    Policy --> CP[Contact point<br/>Email]
+    CP --> SMTP[SMTP 送信]
+    SMTP --> Mail[受信者のメールボックス]
+```
+
+1. **Alerting** → **Alert rules** → **New alert rule** でルールを作成
+2. **Alerting** → **Notification policies** でデフォルトまたはカスタムポリシーに Contact point を割り当て
+
+---
+
+## Grafana サーバーの UFW 設定（API ポートのアクセス制限）
+
+`install_grafana_stack.sh` のファイアウォール設定はすべてのソース IP を許可しています。
+本番環境では、API の着信ポート（Loki / Prometheus / Tempo）をアプリサーバーの IP のみに制限することを推奨します。
+
+### 設定手順
+
+```bash
+# 現在のルールを確認
+sudo ufw status numbered
+```
+
+#### 1. 既存の全開放ルールを削除
+
+```bash
+# ★ 番号は ufw status numbered で確認して指定
+#   Loki(3100), Prometheus(9090), Tempo OTLP(4317, 4318) の Anywhere ルールを削除
+sudo ufw delete allow 3100/tcp
+sudo ufw delete allow 9090/tcp
+sudo ufw delete allow 4317/tcp
+sudo ufw delete allow 4318/tcp
+```
+
+#### 2. アプリサーバーの IP のみ許可
+
+```bash
+# ★ APP_SERVERS にアプリサーバー4台の IP を設定
+APP_SERVERS="192.168.1.11 192.168.1.12 192.168.1.13 192.168.1.14"
+
+for ip in $APP_SERVERS; do
+  sudo ufw allow from "$ip" to any port 3100 proto tcp comment "Loki - ${ip}"
+  sudo ufw allow from "$ip" to any port 9090 proto tcp comment "Prometheus - ${ip}"
+  sudo ufw allow from "$ip" to any port 4317 proto tcp comment "Tempo OTLP gRPC - ${ip}"
+  sudo ufw allow from "$ip" to any port 4318 proto tcp comment "Tempo OTLP HTTP - ${ip}"
+done
+```
+
+#### 3. Grafana Web UI は管理者ネットワークのみ（任意）
+
+```bash
+# 管理者ネットワークからのみ Grafana UI にアクセスを許可
+sudo ufw allow from 192.168.1.0/24 to any port 3000 proto tcp comment "Grafana UI - admin network"
+
+# 既存の全開放ルールがあれば削除
+sudo ufw delete allow 3000/tcp
+```
+
+#### 4. 設定の確認
+
+```bash
+sudo ufw status verbose
+```
+
+期待される状態：
+
+```
+To                         Action      From
+--                         ------      ----
+22/tcp                     ALLOW       Anywhere          # SSH
+3000/tcp                   ALLOW       192.168.1.0/24    # Grafana UI
+3100/tcp                   ALLOW       192.168.1.11      # Loki
+3100/tcp                   ALLOW       192.168.1.12      # Loki
+...
+9090/tcp                   ALLOW       192.168.1.11      # Prometheus
+...
+4317/tcp                   ALLOW       192.168.1.11      # Tempo OTLP gRPC
+...
+```
+
+> **注意**: UFW のデフォルトポリシーが `deny (incoming)` であることを確認してください（`sudo ufw default deny incoming`）。
+> SSH（22/tcp）の許可ルールが存在することも必ず確認してから操作してください。
+
+---
+
 ## トラブルシューティング
 
 ### Alloy がログを送信しない
