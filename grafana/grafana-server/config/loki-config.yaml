@@ -18,17 +18,17 @@ common:
       rules_directory: /var/lib/loki/rules
   replication_factor: 1
   ring:
-    instance_addr: 127.0.0.1    # ★ インターフェース自動検出をスキップ
+    instance_addr: 127.0.0.1
+    instance_interface_names:
+      - ens3
+      - lo
     kvstore:
       store: inmemory
 
-# ★ memberlist がインターフェースを探しに行かないように明示指定
 memberlist:
   bind_addr:
-    - 153.120.3.122
-  interface_names:
-    - ens3
-    - lo
+    - 0.0.0.0
+  advertise_addr: 153.120.3.122
 
 schema_config:
   configs:
@@ -68,3 +68,8 @@ table_manager:
 
 analytics:
   reporting_enabled: false
+
+frontend:
+  instance_interface_names:
+    - ens3
+    - lo
