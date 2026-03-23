@@ -14,6 +14,8 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 echo "============================================"
 echo " Grafana Observability Stack インストール"
 echo " (Docker 不使用 / ネイティブインストール)"
@@ -192,8 +194,6 @@ deploy_configs() {
     echo "============================================"
     echo " 設定ファイルを配置中..."
     echo "============================================"
-
-    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
     # Loki 設定
     if [ -f "${SCRIPT_DIR}/config/loki-config.yaml" ]; then
