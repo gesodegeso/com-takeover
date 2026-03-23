@@ -8,7 +8,7 @@ Wants=network-online.target
 Type=simple
 User=loki
 Group=loki
-ExecStart=/usr/local/bin/loki -config.file=/etc/loki/loki-config.yaml
+ExecStart=/usr/local/bin/loki -config.file=/etc/loki/loki-config.yaml -memberlist.bind-addr=127.0.0.1 -ring.instance-addr=127.0.0.1
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
