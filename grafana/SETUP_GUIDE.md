@@ -435,6 +435,157 @@ sudo systemctl restart puma
 sudo systemctl restart unicorn
 ```
 
+### 3.1.1 Podman コンテナで動作する Rails アプリの場合
+
+Rails アプリを Podman コンテナでデプロイしている場合は、ホスト上の Alloy と連携するための追加設定が必要です。
+
+```mermaid
+flowchart LR
+  subgraph Host["ホスト OS"]
+    Alloy["Grafana Alloy<br/>:4317 / :4318"]
+    LogVol["/var/log/myapp/"]
+  end
+
+  subgraph Pod["Podman コンテナ"]
+    Rails["Rails App"]
+    Rails -- "OTLP<br/>host.containers.internal:4318" --> Alloy
+    Rails -- "ログ出力<br/>/app/log/" --> LogVol
+  end
+```
+
+#### Dockerfile への Gem 追加
+
+```dockerfile
+# Gemfile に OTel 関連の gem を追加済みであること
+# （3.1 の Gem の追加 を参照）
+RUN bundle install
+```
+
+#### initializer ファイルの配置
+
+コンテナイメージのビルド前に、ホストから initializer をコピーしておきます。
+
+```bash
+cp /tmp/alloy-setup/otel-rails/opentelemetry.rb /path/to/rails-app/config/initializers/
+cp /tmp/alloy-setup/otel-rails/lograge.rb /path/to/rails-app/config/initializers/
+```
+
+#### 環境変数の設定
+
+コンテナ内からホスト上の Alloy に接続するために、`host.containers.internal` を使用します。
+
+```bash
+# podman run で指定する場合
+podman run -d \
+  --name myapp-rails \
+  -e OTEL_SERVICE_NAME="myapp-rails" \
+  -e OTEL_SERVICE_VERSION="1.0.0" \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT="http://host.containers.internal:4318/v1/traces" \
+  -e RAILS_ENV=production \
+  -e RAILS_LOG_TO_STDOUT=false \
+  -v /var/log/myapp:/app/log:Z \
+  myapp-rails:latest
+```
+
+> **ポイント**: Podman では `host.containers.internal` がホストの IP に自動解決されます。
+> Docker の `host-gateway` に相当する機能です。
+
+#### Quadlet（systemd 管理）を使う場合
+
+Podman コンテナを systemd で管理する場合は、Quadlet ファイルに環境変数とボリュームを記述します。
+
+```ini
+# ~/.config/containers/systemd/myapp-rails.container
+# （rootless の場合。rootful は /etc/containers/systemd/ に配置）
+
+[Container]
+Image=myapp-rails:latest
+ContainerName=myapp-rails
+
+Environment=OTEL_SERVICE_NAME=myapp-rails
+Environment=OTEL_SERVICE_VERSION=1.0.0
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://host.containers.internal:4318/v1/traces
+Environment=RAILS_ENV=production
+Environment=RAILS_LOG_TO_STDOUT=false
+
+# ログをホストのボリュームに出力（Alloy が読み取る）
+Volume=/var/log/myapp:/app/log:Z
+
+# Prometheus メトリクス用ポート（任意）
+PublishPort=9394:9394
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+# Quadlet の反映
+systemctl --user daemon-reload
+systemctl --user start myapp-rails
+systemctl --user enable myapp-rails
+```
+
+#### ログ収集の設定
+
+コンテナ内のログをホストにマウントする方法（推奨）と、`podman logs` から収集する方法があります。
+
+**方法 A: ボリュームマウント（推奨）**
+
+Rails のログをファイル出力し、ホスト側にマウントします。Alloy の既存設定がそのまま利用できます。
+
+```ruby
+# config/environments/production.rb
+config.logger = ActiveSupport::Logger.new(Rails.root.join("log", "production.log"))
+```
+
+Alloy の `config.alloy` のログパスがマウント先と一致していることを確認してください。
+
+```
+# config.alloy で確認
+__path__ = "/var/log/myapp/production.log"
+```
+
+**方法 B: journald 経由（代替）**
+
+Podman のログドライバを `journald` にして、Alloy の `loki.source.journal` で収集します。
+
+```bash
+# podman run 時に指定
+podman run --log-driver=journald --name myapp-rails ...
+```
+
+Alloy はすでに `loki.source.journal "systemd"` を設定済みなので、追加設定不要で収集されます。
+ただし、ログのパース（JSON 展開やラベル付与）を行いたい場合はパイプラインの追加が必要です。
+
+#### メトリクスの公開
+
+コンテナ内で `prometheus_exporter` を起動し、ポートを公開します。
+
+```bash
+podman run -d \
+  -p 9394:9394 \
+  ...
+  myapp-rails:latest
+```
+
+Alloy の `prometheus.scrape "app_metrics"` がすでに `localhost:9394` を対象にしているため、追加設定は不要です。
+
+#### 接続確認
+
+```bash
+# コンテナ内から Alloy への疎通確認
+podman exec myapp-rails curl -s http://host.containers.internal:4318/v1/traces
+
+# ホスト側でコンテナのログが出力されているか確認
+ls -la /var/log/myapp/
+
+# Alloy がログを読み取っているか確認
+sudo journalctl -u alloy -f | grep myapp
+```
+
 ### 3.2 Python アプリ
 
 #### パッケージのインストール
