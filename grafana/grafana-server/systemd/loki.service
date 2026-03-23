@@ -1,0 +1,25 @@
+[Unit]
+Description=Loki Log Aggregation System
+Documentation=https://grafana.com/docs/loki/latest/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=loki
+Group=loki
+ExecStart=/usr/local/bin/loki -config.file=/etc/loki/loki-config.yaml
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+
+# セキュリティ強化
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/loki
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,29 @@
+# ============================================
+# requirements_otel.txt
+# ============================================
+
+# Core
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-grpc
+opentelemetry-exporter-otlp-proto-http
+
+# フレームワーク計装（使用するものだけ有効化）
+opentelemetry-instrumentation-flask
+# opentelemetry-instrumentation-django
+# opentelemetry-instrumentation-fastapi
+
+# ライブラリ計装
+opentelemetry-instrumentation-requests
+opentelemetry-instrumentation-urllib3
+opentelemetry-instrumentation-sqlalchemy
+opentelemetry-instrumentation-pymysql
+opentelemetry-instrumentation-redis
+opentelemetry-instrumentation-celery
+opentelemetry-instrumentation-logging
+
+# ログ構造化
+python-json-logger
+
+# メトリクス
+prometheus-client

@@ -1,0 +1,14 @@
+# ============================================
+# Gemfile に追加する gem
+# ============================================
+
+# --- OpenTelemetry トレース ---
+gem 'opentelemetry-sdk'
+gem 'opentelemetry-exporter-otlp'
+gem 'opentelemetry-instrumentation-all'
+
+# --- ログ構造化 ---
+gem 'lograge'
+
+# --- メトリクス ---
+gem 'prometheus_exporter'

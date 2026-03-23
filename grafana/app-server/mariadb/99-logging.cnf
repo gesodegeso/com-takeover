@@ -1,0 +1,20 @@
+# ============================================
+# /etc/mysql/mariadb.conf.d/99-logging.cnf
+# MariaDB ログ出力設定
+# ============================================
+
+[mysqld]
+
+# エラーログ
+log_error = /var/log/mysql/error.log
+log_warnings = 2
+
+# スロークエリログ
+slow_query_log = 1
+slow_query_log_file = /var/log/mysql/slow-query.log
+long_query_time = 1
+log_queries_not_using_indexes = 1
+
+# General ログ（本番では無効推奨）
+# general_log = 1
+# general_log_file = /var/log/mysql/general.log

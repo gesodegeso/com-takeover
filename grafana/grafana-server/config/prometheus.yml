@@ -1,0 +1,19 @@
+# ============================================
+# /etc/prometheus/prometheus.yml
+# Prometheus 設定（ネイティブインストール用）
+# ============================================
+# メトリクスは Alloy から remote_write で Push されるため、
+# scrape_configs は Prometheus 自身の監視のみ。
+# 起動時に --web.enable-remote-write-receiver フラグが必要。
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'production'
+    monitor: 'grafana-stack'
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

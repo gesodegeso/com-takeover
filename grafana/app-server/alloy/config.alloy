@@ -1,0 +1,374 @@
+// ============================================
+// Grafana Alloy Configuration
+// アプリサーバー用（4台共通テンプレート）
+// ============================================
+//
+// ★ 各サーバーで変更が必要な箇所:
+//   - GRAFANA_SERVER_IP を Grafana サーバーの IP に置換
+//   - アプリのログパスを環境に合わせて調整
+//   - 不要なセクション（Rails or Python）はコメントアウト
+//
+
+
+// ============================================
+// 1. サーバーメトリクス収集（Prometheus へ送信）
+// ============================================
+
+// Node Exporter 相当（CPU, メモリ, ディスク, ネットワーク）
+prometheus.exporter.unix "node" {}
+
+prometheus.scrape "node_metrics" {
+  targets         = prometheus.exporter.unix.node.targets
+  forward_to      = [prometheus.remote_write.default.receiver]
+  scrape_interval = "15s"
+  job_name        = "node"
+}
+
+// アプリが /metrics エンドポイントを公開している場合
+prometheus.scrape "app_metrics" {
+  targets = [{
+    __address__ = "localhost:9394",   // Rails: prometheus_exporter のデフォルト
+    // __address__ = "localhost:8000",  // Python: prometheus_client のデフォルト
+    job = "myapp",
+  }]
+  metrics_path    = "/metrics"
+  forward_to      = [prometheus.remote_write.default.receiver]
+  scrape_interval = "15s"
+}
+
+prometheus.remote_write "default" {
+  endpoint {
+    url = "http://GRAFANA_SERVER_IP:9090/api/v1/write"
+  }
+}
+
+
+// ============================================
+// 2. Ruby on Rails アプリログ収集
+// ============================================
+
+local.file_match "rails_logs" {
+  path_targets = [{
+    __address__ = "localhost",
+    __path__    = "/var/www/myapp/log/production.log",
+    job         = "rails",
+    app         = "myapp",
+    host        = constants.hostname,
+    environment = "production",
+  }]
+}
+
+loki.source.file "rails_logs" {
+  targets    = local.file_match.rails_logs.targets
+  forward_to = [loki.process.rails_pipeline.receiver]
+}
+
+loki.process "rails_pipeline" {
+  // 複数行ログの結合（スタックトレース対応）
+  stage.multiline {
+    firstline     = "^[A-Z], \\[|^\\{"
+    max_wait_time = "3s"
+    max_lines     = 128
+  }
+
+  // JSON形式のログ（lograge 使用時）
+  stage.json {
+    expressions = {
+      timestamp = "timestamp",
+      level     = "level",
+      method    = "method",
+      path      = "path",
+      status    = "status",
+      duration  = "duration",
+      trace_id  = "trace_id",
+    }
+  }
+
+  stage.labels {
+    values = {
+      level  = "",
+      method = "",
+    }
+  }
+
+  stage.structured_metadata {
+    values = { trace_id = "" }
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+
+// ============================================
+// 3. Python アプリログ収集
+// ============================================
+
+local.file_match "python_logs" {
+  path_targets = [{
+    __address__ = "localhost",
+    __path__    = "/var/log/myapp/*.log",
+    job         = "python",
+    app         = "myapp",
+    host        = constants.hostname,
+    environment = "production",
+  }]
+}
+
+loki.source.file "python_logs" {
+  targets    = local.file_match.python_logs.targets
+  forward_to = [loki.process.python_pipeline.receiver]
+}
+
+loki.process "python_pipeline" {
+  stage.multiline {
+    firstline     = "^\\d{4}-\\d{2}-\\d{2}|^\\{|^\\[INFO|^\\[ERROR|^\\[WARNING|^\\[DEBUG"
+    max_wait_time = "3s"
+    max_lines     = 128
+  }
+
+  stage.json {
+    expressions = {
+      timestamp = "timestamp",
+      level     = "level",
+      logger    = "logger",
+      message   = "message",
+      trace_id  = "trace_id",
+      span_id   = "span_id",
+    }
+  }
+
+  stage.regex {
+    expression = "^(?P<timestamp>\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}[^ ]*) (?P<level>\\w+)"
+  }
+
+  stage.regex {
+    expression = "trace_id=(?P<trace_id>[a-f0-9]+)"
+  }
+
+  stage.labels {
+    values = { level = "" }
+  }
+
+  stage.structured_metadata {
+    values = { trace_id = "", span_id = "" }
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+
+// ============================================
+// 4. Nginx ログ収集
+// ============================================
+
+local.file_match "nginx_access" {
+  path_targets = [{
+    __address__ = "localhost",
+    __path__    = "/var/log/nginx/access.log",
+    job         = "nginx",
+    log_type    = "access",
+    host        = constants.hostname,
+  }]
+}
+
+loki.source.file "nginx_access" {
+  targets    = local.file_match.nginx_access.targets
+  forward_to = [loki.process.nginx_access_pipeline.receiver]
+}
+
+loki.process "nginx_access_pipeline" {
+  stage.regex {
+    expression = "^(?P<remote_addr>[\\w\\.:-]+) - (?P<remote_user>\\S+) \\[(?P<time_local>[^\\]]+)\\] \"(?P<method>\\w+) (?P<request_uri>\\S+) (?P<protocol>\\S+)\" (?P<status>\\d{3}) (?P<body_bytes_sent>\\d+) \"(?P<http_referer>[^\"]*)\" \"(?P<http_user_agent>[^\"]*)\""
+  }
+
+  stage.labels {
+    values = { method = "", status = "" }
+  }
+
+  stage.timestamp {
+    source = "time_local"
+    format = "02/Jan/2006:15:04:05 -0700"
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+local.file_match "nginx_error" {
+  path_targets = [{
+    __address__ = "localhost",
+    __path__    = "/var/log/nginx/error.log",
+    job         = "nginx",
+    log_type    = "error",
+    host        = constants.hostname,
+  }]
+}
+
+loki.source.file "nginx_error" {
+  targets    = local.file_match.nginx_error.targets
+  forward_to = [loki.process.nginx_error_pipeline.receiver]
+}
+
+loki.process "nginx_error_pipeline" {
+  stage.regex {
+    expression = "^(?P<timestamp>\\d{4}/\\d{2}/\\d{2} \\d{2}:\\d{2}:\\d{2}) \\[(?P<level>\\w+)\\]"
+  }
+
+  stage.labels {
+    values = { level = "" }
+  }
+
+  stage.timestamp {
+    source = "timestamp"
+    format = "2006/01/02 15:04:05"
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+
+// ============================================
+// 5. MariaDB ログ収集
+// ============================================
+
+local.file_match "mariadb_error" {
+  path_targets = [{
+    __address__ = "localhost",
+    __path__    = "/var/log/mysql/error.log",
+    job         = "mariadb",
+    log_type    = "error",
+    host        = constants.hostname,
+  }]
+}
+
+loki.source.file "mariadb_error" {
+  targets    = local.file_match.mariadb_error.targets
+  forward_to = [loki.process.mariadb_error_pipeline.receiver]
+}
+
+loki.process "mariadb_error_pipeline" {
+  stage.regex {
+    expression = "^(?P<timestamp>\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2})(\\.\\d+)?\\s+\\d+\\s+\\[(?P<level>\\w+)\\]"
+  }
+
+  stage.labels {
+    values = { level = "" }
+  }
+
+  stage.timestamp {
+    source = "timestamp"
+    format = "2006-01-02T15:04:05"
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+local.file_match "mariadb_slow" {
+  path_targets = [{
+    __address__ = "localhost",
+    __path__    = "/var/log/mysql/slow-query.log",
+    job         = "mariadb",
+    log_type    = "slow_query",
+    host        = constants.hostname,
+  }]
+}
+
+loki.source.file "mariadb_slow" {
+  targets    = local.file_match.mariadb_slow.targets
+  forward_to = [loki.process.mariadb_slow_pipeline.receiver]
+}
+
+loki.process "mariadb_slow_pipeline" {
+  stage.multiline {
+    firstline     = "^# Time:|^# User@Host:"
+    max_wait_time = "3s"
+    max_lines     = 64
+  }
+
+  stage.regex {
+    expression = "Query_time:\\s+(?P<query_time>[\\d.]+)\\s+Lock_time:\\s+(?P<lock_time>[\\d.]+)\\s+Rows_sent:\\s+(?P<rows_sent>\\d+)\\s+Rows_examined:\\s+(?P<rows_examined>\\d+)"
+  }
+
+  stage.structured_metadata {
+    values = { query_time = "", rows_examined = "" }
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+
+// ============================================
+// 6. systemd ジャーナルログ収集
+// ============================================
+
+loki.source.journal "systemd" {
+  forward_to = [loki.write.default.receiver]
+  labels = {
+    job  = "systemd",
+    host = constants.hostname,
+  }
+}
+
+
+// ============================================
+// 7. Loki 送信先
+// ============================================
+
+loki.write "default" {
+  endpoint {
+    url = "http://GRAFANA_SERVER_IP:3100/loki/api/v1/push"
+  }
+  external_labels = {
+    host = constants.hostname,
+  }
+}
+
+
+// ============================================
+// 8. トレース収集（OTLP → Tempo）
+// ============================================
+
+otelcol.receiver.otlp "default" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+  output {
+    traces = [otelcol.processor.batch.default.input]
+  }
+}
+
+otelcol.processor.batch "default" {
+  timeout             = "5s"
+  send_batch_size     = 1000
+  send_batch_max_size = 2000
+  output {
+    traces = [otelcol.processor.attributes.default.input]
+  }
+}
+
+otelcol.processor.attributes "default" {
+  action {
+    key    = "host.name"
+    value  = constants.hostname
+    action = "upsert"
+  }
+  action {
+    key    = "deployment.environment"
+    value  = "production"
+    action = "upsert"
+  }
+  output {
+    traces = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = "GRAFANA_SERVER_IP:4317"
+    tls {
+      insecure = true
+    }
+  }
+}
